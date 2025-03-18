@@ -1,0 +1,330 @@
+---
+title: "2022-09-09-FleaTissueBc"
+author: "Charlotte Manvell"
+date: "2022-09-09"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+# Model {.tabset}
+
+## Data handling
+```{r, warning = FALSE, error = FALSE, message = FALSE}
+library(here)
+library(dplyr)
+library(ggplot2)
+library(ggsci)
+library(MASS)
+library(lmtest)
+library(ResourceSelection)
+library(descr) #for cross tables
+library(Deducer)
+npg <- pal_d3("category10")(10)
+theme_char <- function(base_size = 11, base_family = ""){
+  theme_bw() %+replace%
+    theme(axis.text = element_text(color = "Black"),
+          panel.grid.minor = element_blank(),
+          panel.grid.major = element_blank(),
+          axis.line = element_line(),
+          panel.border = element_blank())
+}
+theme_set(theme_char())
+ORs <- function(model) {
+  Summary<-as_tibble(summary(model)$coefficients, row.names = "Variable")
+  Summary$`Pr(>|z|)`<-round(Summary$`Pr(>|z|)`, 4)
+  Summary$Variable<-rownames(summary(model)$coefficients)
+  ORs<-as_tibble(round(exp(cbind(coef(model), confint.default(model))), digits = 2))
+  ORs$Variable<-rownames(exp(cbind(coef(model), confint.default(model))))
+  names(ORs)[1]<-"OR"
+  Mod<-merge(Summary, ORs, by = "Variable")
+  Mod$'95% CI'<-paste(Mod$`2.5 %`, Mod$`97.5 %`, sep = " - " )
+  modname<-as.data.frame(Mod)
+  #setwd("C:/Users/ewlashni/OneDrive/Documents/NCSU PhD/Bartonella/Idexx ELISA project/model ORs")
+  return(Mod)
+}
+```
+
+```{r data}
+df <- read.csv(here("FreeRoamingDataAnalysis","FleaTissue-LR.csv")) #had to remove the "FreeRoamingDataAnalysis" to get it to run on my computer....maybe this is me not knowing how to Git??)
+
+df$Bc <- ifelse(df$bartspp == "B. clarridgeiae", 1, 0)
+
+df$catbart <- ifelse(df$catbartspp == "Negative", 0, 1)
+
+
+```
+
+
+## Univariate Analysis
+
+```{r}
+lab <- expression(paste("Flea ", italic("B. clarridgeiae"), "Infection"))
+
+df %>% mutate(Bc == as.character(Bc)) %>% 
+  mutate(Bc = case_when(Bc == "0" ~ "Negative", 
+                             Bc == "1" ~ "Positive")) %>% 
+ggplot(aes(x = Sex, fill = as.character(Bc)))+
+  geom_bar(position = position_fill(), color = "black", width = 0.5)+
+  scale_y_continuous(expand = c(0,0), labels = scales::percent)+
+  labs(fill = lab, y = "Percentage of fleas", x = "Host cat sex")+
+  scale_fill_manual(values = c("White", "#163822"))
+ggsave(here("FreeRoamingDataAnalysis", "Images", "CatSex.png"), width = 6, height = 4)
+
+df %>% mutate(Bc == as.character(Bc)) %>% 
+  mutate(Bc = case_when(Bc == "0" ~ "Negative", 
+                             Bc == "1" ~ "Positive")) %>% 
+  ggplot(aes(x = Weight, fill = as.character(Bc)))+
+  geom_histogram(binwidth = 0.5, color = "black")+
+  scale_y_continuous(expand = c(0,0))+
+  labs(fill = lab, y = "Number of fleas", x = "Host cat weight (kg)")+
+  scale_fill_manual(values = c("White", "#163822"))+
+  facet_wrap(~Sex)
+ggsave(here("FreeRoamingDataAnalysis", "Images", "CatWeight.png"), width = 6, height = 4)
+
+
+ggplot(df, aes(x = Clade, fill = as.character(Bc)))+
+  geom_bar(position = position_fill(), color = "black")
+ggplot(df, aes(x = Location, fill = as.character(Bc)))+
+  geom_bar(position = position_fill(), color = "black")
+ggplot(df, aes(x = rickspp, fill = as.character(Bc)))+
+  geom_bar(position = position_fill(), color = "black")
+ggplot(df, aes(x = AEspp, fill = as.character(Bc)))+
+  geom_bar(color = "black")+
+  theme(axis.text.x = element_text(angle = 45, hjust = 1))
+ggplot(df, aes(x = catbartspp, fill = as.character(Bc)))+
+  geom_bar(color = "black")+
+  theme(axis.text.x = element_text(angle = 45, hjust = 1))
+ggplot(df, aes(x = catrickspp, fill = as.character(Bc)))+
+  geom_bar(color = "black")+
+  theme(axis.text.x = element_text(angle = 45, hjust = 1))
+ggplot(df, aes(x = catmycospp, fill = as.character(Bc)))+
+  geom_bar(color = "black")+
+  theme(axis.text.x = element_text(angle = 45, hjust = 1))
+```
+
+
+```{r}
+var <- c("Sex", "Weight", "Clade", "Location", "rickspp", "AE", "catbart", "catmycospp")
+
+comp.df <- df %>% dplyr::select(Sex, Weight, Clade, Location, rickspp, AE, catbart, catmycospp)
+```
+
+
+```{r}
+
+numfleas<-as_tibble(summary(as.factor(df$CatID)))
+numfleas$CatID<-names(summary(as.factor(df$CatID)))
+df<-left_join(df, numfleas, by = "CatID") #added variable called numfleas that is the number of fleas per cat
+names(df)[[33]] <- "numfleas"
+
+uni.numflea <- glm(data = df, Bc~numfleas, family = "binomial") #univariate number of fleas per cat
+uni.numflea <- summary(uni.numflea)$coefficients
+
+
+df$Sex <- relevel(factor(df$Sex), ref = "Female")
+uni.sex <- glm(data = df, Bc~Sex, family = "binomial") #univariate Cat Sex
+uni.sex.co <- summary(uni.sex)$coefficients
+
+CrossTable(df$Bc, df$Sex, chisq = T)
+
+uni.weight <- glm(data = df, Bc~Weight, family = "binomial") #univariate Cat Weight
+uni.weight.co <- summary(uni.weight)$coefficients
+
+df$Clade <- relevel(factor(df$Clade), ref = "Clade 4")
+uni.clade <- glm(data = df, Bc~Clade, family = "binomial") #univariate flea clade
+uni.clade.co <- summary(uni.clade)$coefficients
+
+CrossTable(df$Bc, df$Clade, chisq = T)
+
+df$Location <- relevel(factor(df$Location), ref = "Raleigh, NC")
+uni.loc <- glm(data = df, Bc~Location, family = "binomial")
+uni.loc.co <- summary(uni.loc)$coefficients
+
+CrossTable(df$Bc, df$Location, chisq = T)
+
+df$rickspp <- relevel(factor(df$rickspp), ref = "Negative")
+uni.rickspp <- glm(data = df, Bc~rickspp, family = "binomial")
+uni.rickspp.co <- summary(uni.rickspp)$coefficients
+
+uni.wolb <- glm(data = df, Bc~AE, family = "binomial")
+uni.wolb.co <- summary(uni.wolb)$coefficients
+
+uni.wolb2<-glm(data = df, Bc~AEspp, family = "binomial")
+summary(uni.wolb2)
+
+df$catbartspp <- relevel(factor(df$catbartspp), ref = "Negative")
+uni.catbart <- glm(data = df, Bc~catbartspp, family = "binomial")
+uni.catbart.co <- summary(uni.catbart)$coefficients
+
+df$catbc<-ifelse(df$catbartspp == "B. clarridgeiae", "Blcar", "No Bclar")
+df$catbc <- relevel(factor(df$catbc), ref = "No Bclar")
+CrossTable(df$Bc, df$catbc, chisq = T)
+
+
+df$catmycospp <- relevel(factor(df$catmycospp), ref = "Negative")
+uni.catmyco <- glm(data = df, Bc~catmycospp, family = "binomial")
+uni.catmyco.co <- summary(uni.catmyco)$coefficients
+
+uni.numflea
+uni.sex.co #keep
+uni.weight.co #keep
+uni.clade.co #drop
+uni.loc.co #keep
+uni.rickspp.co #drop
+uni.wolb.co #drop
+uni.catbart.co #keep
+uni.catmyco.co #drop
+```
+
+## Model Fitting
+
+```{r}
+model <- glm(data = df, Bc~Sex + Weight + catbart + Location + numfleas, family = "binomial")
+summary(model)
+```
+
+```{r}
+
+## Variables of interest
+  #Num fleas per cat <-possible confounder
+  #*Sex <- p<0.2
+  #*Weight <0.2
+  #Flea Clade <- is related? p>0.2
+  #Location <- is related? p>0.2
+  #Rickspp p>0.2
+  #Wolbac p>0.2 (AEspp)
+  #*Cat bart <- is related? Only care about Bclar vs no Bclar for matching up
+  #Cat myco spp <- remove
+
+big.model<-glm(data = df, Bc ~ numfleas + Sex + Weight + catbc + AEspp + rickspp + Clade + Location, family = "binomial")
+summary(big.model)
+
+stepAIC(big.model, trace = F, direction = "both") #retains sex and weight only <- this is the "small" model that best explains the data. Now you can use these factors and potential confounders to evaluate whether other factors are associated even once these are controlled for....
+
+
+final.explan.model<-glm(data = df, Bc ~ numfleas + Sex + Weight, family = "binomial")
+summary(final.explan.model) #the results here suggest that even after controlling for the number of fleas collected from each cat, cat sex and weight are significantly associated
+ORs(final.explan.model)
+
+final.locclade.model<-glm(data = df, Bc ~ numfleas + Sex + Weight + Location + Clade, family = "binomial")
+summary(final.locclade.model) #the results here suggest that even after controlling for the number of fleas collected from each cat, as well as cat weight and sex, the location and clade were not associated with Bc infection in fleas.
+ORs(final.locclade.model)
+
+final.catinf.model<-glm(data = df, Bc ~ numfleas + Sex + Weight + catbc, family = "binomial")
+summary(final.catinf.model) #Again controlling for the number of fleas collected from each cat, as well as cat weight and sex, cats with Bc were not significantly more likely to have fleas w Bc compared to cats without Bc.
+ORs(final.catinf.model)
+
+final.fleacoinf.model<-glm(data = df, Bc ~ numfleas + Sex + Weight + AE + rickspp, family = "binomial")
+summary(final.fleacoinf.model) #Finally controlling for the number of fleas collected from each cat, as well as cat weight and sex, flea coinfection w Rick or Wolbac were not significantly associted with flea infection w Bc.
+ORs(final.fleacoinf.model)
+```
+
+
+
+
+
+Sex - significant change, keep
+```{r}
+model.wo.sex <- glm(data = df, Bc~Weight + Clade + catbart + Location, family = "binomial")
+paste("AIC: ", round(AIC(model.wo.sex), 2))
+lrtest(model, model.wo.sex)
+```
+
+Weight - significant change, keep
+```{r}
+model.wo.weight <- glm(data = df, Bc~Sex  + Clade + catbart + Location, family = "binomial")
+paste("AIC: ", round(AIC(model.wo.weight), 2))
+lrtest(model, model.wo.weight)
+```
+
+Cat bart - remove (non-sig and AIC goes down)
+```{r}
+model.wo.catbart <- glm(data = df, Bc~Sex + Weight  + Location, family = "binomial")
+paste("AIC: ", round(AIC(model.wo.catbart), 2))
+lrtest(model, model.wo.catbart)
+```
+
+Location - remove (non-sig and AIC goes down)
+```{r}
+model.wo.loc <- glm(data = df, Bc~Sex + Weight + catbart, family = "binomial")
+paste("AIC: ", round(AIC(model.wo.loc), 2))
+lrtest(model, model.wo.loc)
+```
+
+Number Fleas
+```{r}
+model.wo.num <- glm(data = df, Bc~Weight + Clade + catbart + Location + Sex, family = "binomial")
+paste("AIC: ", round(AIC(model.wo.sex), 2))
+lrtest(model, model.wo.num)
+```
+
+## Big Model
+
+```{r}
+big_mod <- glm(data = df, Bc~Location + Weight + Sex + Clade + Location + rickspp + AE + catbart + catmycospp, family = "binomial") #create model with all variables to run stepAIC() on
+summary(big_mod)
+```
+
+## Final Model
+Retained Weight and Cat Sex so I created small_mod which includes only sex and weight
+
+```{r}
+stepAIC(model, direction = "both", trace = F)
+```
+
+```{r}
+small_mod <- glm(data = df, Bc~Weight + Sex, family = "binomial") #create model with stepAIC selected variables
+summary(small_mod)
+ORs(small_mod)
+```
+
+```{r}
+Predprob <- predict(small_mod, type = "response")
+rocplot(small_mod)
+```
+
+## Modeling controlling for sig. variables
+
+```{r}
+sw.clade <- glm(data = df, Bc~Clade + Sex + Weight, family = "binomial") #univariate flea clade
+sw.clade.co <- summary(sw.clade)$coefficients
+
+sw.loc <- glm(data = df, Bc~Location+ Sex + Weight, family = "binomial")
+sw.loc.co <- summary(sw.loc)$coefficients
+
+sw.rickspp <- glm(data = df, Bc~rickspp+ Sex + Weight, family = "binomial")
+sw.rickspp.co <- summary(sw.rickspp)$coefficients
+
+
+sw.wolb <- glm(data = df, Bc~AE+ Sex + Weight, family = "binomial")
+sw.wolb.co <- summary(sw.wolb)$coefficients
+
+sw.catbart <- glm(data = df, Bc~catbart+ Sex + Weight, family = "binomial")
+sw.catbart.co <- summary(sw.catbart)$coefficients
+
+sw.catmyco <- glm(data = df, Bc~catmycospp+ Sex + Weight, family = "binomial")
+sw.catmyco.co <- summary(sw.catmyco)$coefficients
+
+sw.clade.co #keep
+sw.loc.co #drop
+sw.rickspp.co #drop
+sw.wolb.co #drop
+sw.catbart.co #drop
+sw.catmyco.co #drop
+```
+
+
+Clade doesn't significantly change model with sex + weight
+```{r}
+summary(sw.clade)
+lrtest(sw.clade, small_mod)
+```
+
+```{r}
+median(df$numfleas)
+range(df$numfleas)
+```
+
+
